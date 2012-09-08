@@ -280,7 +280,7 @@ extern "C" {
 
 #define SSL3_RT_MAX_EXTRA			(16384)
 
-/* Maximum plaintext length: defined by SSL/TLS standards */
+/* Default buffer length used for writen records.  Thus a generated record * will contain plaintext no larger than this value. */#define SSL3_RT_DEFAULT_PLAIN_LENGTH	2048/* Maximum plaintext length: defined by SSL/TLS standards */
 #define SSL3_RT_MAX_PLAIN_LENGTH		16384
 /* Maximum compression overhead: defined by SSL/TLS standards */
 #define SSL3_RT_MAX_COMPRESSED_OVERHEAD		1024
@@ -311,7 +311,7 @@ extern "C" {
 #define SSL3_RT_MAX_PACKET_SIZE		\
 		(SSL3_RT_MAX_ENCRYPTED_LENGTH+SSL3_RT_HEADER_LENGTH)
 
-#define SSL3_MD_CLIENT_FINISHED_CONST	"\x43\x4C\x4E\x54"
+/* Extra space for empty fragment, headers, MAC, and padding. */#define SSL3_RT_DEFAULT_WRITE_OVERHEAD  256#define SSL3_RT_DEFAULT_PACKET_SIZE     4096 - SSL3_RT_DEFAULT_WRITE_OVERHEAD#if SSL3_RT_DEFAULT_PLAIN_LENGTH + SSL3_RT_DEFAULT_WRITE_OVERHEAD > SSL3_RT_DEFAULT_PACKET_SIZE#error "Insufficient space allocated for write buffers."#endif#define SSL3_MD_CLIENT_FINISHED_CONST	"\x43\x4C\x4E\x54"
 #define SSL3_MD_SERVER_FINISHED_CONST	"\x53\x52\x56\x52"
 
 #define SSL3_VERSION			0x0300
@@ -477,7 +477,7 @@ typedef struct ssl3_state_st
 	void *server_opaque_prf_input;
 	size_t server_opaque_prf_input_len;
 
-	struct	{
+#ifndef OPENSSL_NO_NEXTPROTONEG	/* Set if we saw the Next Protocol Negotiation extension from	   our peer. */	int next_proto_neg_seen;#endif	struct	{
 		/* actually only needs to be 16+20 */
 		unsigned char cert_verify_md[EVP_MAX_MD_SIZE*2];
 
@@ -547,7 +547,7 @@ typedef struct ssl3_state_st
 /*client */
 /* extra state */
 #define SSL3_ST_CW_FLUSH		(0x100|SSL_ST_CONNECT)
-#ifndef OPENSSL_NO_SCTP
+#define SSL3_ST_CUTTHROUGH_COMPLETE	(0x101|SSL_ST_CONNECT)#ifndef OPENSSL_NO_SCTP
 #define DTLS1_SCTP_ST_CW_WRITE_SOCK			(0x310|SSL_ST_CONNECT)
 #define DTLS1_SCTP_ST_CR_READ_SOCK			(0x320|SSL_ST_CONNECT)
 #endif	
@@ -675,4 +675,3 @@ typedef struct ssl3_state_st
 }
 #endif
 #endif
-

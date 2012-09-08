@@ -329,6 +329,7 @@ SSL *SSL_new(SSL_CTX *ctx)
 	OPENSSL_assert(s->sid_ctx_length <= sizeof s->sid_ctx);
 	memcpy(&s->sid_ctx,&ctx->sid_ctx,sizeof(s->sid_ctx));
 	s->verify_callback=ctx->default_verify_callback;
+	s->session_creation_enabled=1;
 	s->generate_session_id=ctx->generate_session_id;
 
 	s->param = X509_VERIFY_PARAM_new();
@@ -1330,6 +1331,32 @@ int SSL_set_cipher_list(SSL *s,const char *str)
 		SSLerr(SSL_F_SSL_SET_CIPHER_LIST, SSL_R_NO_CIPHER_MATCH);
 		return 0;
 		}
+	return 1;
+	}
+
+/** specify the ciphers to be used by the SSL */
+int SSL_set_cipher_lists(SSL *s,STACK_OF(SSL_CIPHER) *sk)
+	{
+	STACK_OF(SSL_CIPHER) *tmp_cipher_list;
+
+	if (sk == NULL)
+		return 0;
+
+        /* Based on end of ssl_create_cipher_list */
+	tmp_cipher_list = sk_SSL_CIPHER_dup(sk);
+	if (tmp_cipher_list == NULL)
+		{
+		return 0;
+		}
+	if (s->cipher_list != NULL)
+		sk_SSL_CIPHER_free(s->cipher_list);
+	s->cipher_list = sk;
+	if (s->cipher_list_by_id != NULL)
+		sk_SSL_CIPHER_free(s->cipher_list_by_id);
+	s->cipher_list_by_id = tmp_cipher_list;
+	(void)sk_SSL_CIPHER_set_cmp_func(s->cipher_list_by_id,ssl_cipher_ptr_id_cmp);
+
+	sk_SSL_CIPHER_sort(s->cipher_list_by_id);
 	return 1;
 	}
 
@@ -2602,7 +2629,7 @@ SSL_METHOD *ssl_bad_method(int ver)
 	return(NULL);
 	}
 
-const char *SSL_get_version(const SSL *s)
+static const char *ssl_get_version(int version)
 	{
 	if (s->version == TLS1_2_VERSION)
 		return("TLSv1.2");
@@ -2610,12 +2637,39 @@ const char *SSL_get_version(const SSL *s)
 		return("TLSv1.1");
 	if (s->version == TLS1_VERSION)
 		return("TLSv1");
-	else if (s->version == SSL3_VERSION)
+	else if (version == SSL3_VERSION)
 		return("SSLv3");
-	else if (s->version == SSL2_VERSION)
+	else if (version == SSL2_VERSION)
 		return("SSLv2");
 	else
 		return("unknown");
+	}
+
+const char *SSL_get_version(const SSL *s)
+	{
+		return ssl_get_version(s->version);
+	}
+
+const char *SSL_SESSION_get_version(const SSL_SESSION *s)
+	{
+		return ssl_get_version(s->ssl_version);
+	}
+
+const char* SSL_authentication_method(const SSL* ssl)
+	{
+	if (ssl->cert != NULL && ssl->cert->rsa_tmp != NULL)
+		return SSL_TXT_RSA "_" SSL_TXT_EXPORT;
+	switch (ssl->version)
+		{
+	case SSL2_VERSION:
+		return SSL_TXT_RSA;
+	case SSL3_VERSION:
+	case TLS1_VERSION:
+	case DTLS1_VERSION:
+		return SSL_CIPHER_authentication_method(ssl->s3->tmp.new_cipher);
+	default:
+		return "UNKNOWN";
+		}
 	}
 
 SSL *SSL_dup(SSL *s)
@@ -3209,6 +3263,31 @@ void SSL_CTX_set_msg_callback(SSL_CTX *ctx, void (*cb)(int write_p, int version,
 void SSL_set_msg_callback(SSL *ssl, void (*cb)(int write_p, int version, int content_type, const void *buf, size_t len, SSL *ssl, void *arg))
 	{
 	SSL_callback_ctrl(ssl, SSL_CTRL_SET_MSG_CALLBACK, (void (*)(void))cb);
+	}
+
+int SSL_export_keying_material(SSL *s, unsigned char *out, size_t olen,
+        const char *label, size_t llen, const unsigned char *p, size_t plen,
+        int use_context)
+	{
+	if (s->version < TLS1_VERSION)
+		return -1;
+
+	return s->method->ssl3_enc->export_keying_material(s, out, olen, label,
+							   llen, p, plen,
+							   use_context);
+	}
+
+int SSL_cutthrough_complete(const SSL *s)
+	{
+	return (!s->server &&                 /* cutthrough only applies to clients */
+		!s->hit &&                        /* full-handshake */
+		s->version >= SSL3_VERSION &&
+		s->s3->in_read_app_data == 0 &&   /* cutthrough only applies to write() */
+		(SSL_get_mode((SSL*)s) & SSL_MODE_HANDSHAKE_CUTTHROUGH) &&  /* cutthrough enabled */
+		SSL_get_cipher_bits(s, NULL) >= 128 &&                      /* strong cipher choosen */
+		s->s3->previous_server_finished_len == 0 &&                 /* not a renegotiation handshake */
+		(s->state == SSL3_ST_CR_SESSION_TICKET_A ||                 /* ready to write app-data*/
+			s->state == SSL3_ST_CR_FINISHED_A));
 	}
 
 /* Allocates new EVP_MD_CTX and sets pointer to it into given pointer
